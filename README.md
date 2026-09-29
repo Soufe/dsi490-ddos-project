@@ -4,7 +4,7 @@ Machine Learning and Data Science project for DDoS Attack Detection using the **
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```text
 ddos project/
@@ -26,7 +26,7 @@ ddos project/
 
 ---
 
-## 🚀 Quick Start for Collaborators
+## Quick Start for Collaborators
 
 ### 1. Clone & Setup Environment
 
@@ -69,7 +69,7 @@ jupyter notebook eda.ipynb
 
 ---
 
-## 🏷️ Label Encoding & SDN Artifacts
+## Label Encoding & SDN Artifacts
 
 - **`Label_Binary`**:
   - `0`: BENIGN (Normal Traffic)
