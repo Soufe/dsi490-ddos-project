@@ -24,3 +24,4 @@ raw_dataset/
 .idea/
 .DS_Store
 Thumbs.db
+cleaned_dataset/*.csv

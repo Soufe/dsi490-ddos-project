@@ -1,0 +1,16 @@
+{
+  "BENIGN": 0,
+  "DNS": 1,
+  "LDAP": 2,
+  "MSSQL": 3,
+  "NTP": 4,
+  "NetBIOS": 5,
+  "Portmap": 6,
+  "SNMP": 7,
+  "SSDP": 8,
+  "Syn": 9,
+  "TFTP": 10,
+  "UDP": 11,
+  "UDPLag": 12,
+  "WebDDoS": 13
+}

@@ -476,6 +476,8 @@ def main():
         base_dir = os.path.dirname(os.path.abspath(__file__))
 
         candidates_01_12 = [
+            os.path.join(base_dir, "dataset", "CSV-01-12", "01-12"),
+            os.path.join(base_dir, "dataset", "CSV-01-12"),
             os.path.join(base_dir, "raw_dataset", "CSV-01-12", "01-12"),
             os.path.join(base_dir, "raw_dataset", "CSV-01-12"),
             os.path.join(base_dir, "raw_data", "CSV-01-12", "01-12"),
@@ -484,6 +486,8 @@ def main():
         folder_01_12 = next((p for p in candidates_01_12 if os.path.exists(p)), candidates_01_12[0])
 
         candidates_03_11 = [
+            os.path.join(base_dir, "dataset", "CSV-03-11", "03-11"),
+            os.path.join(base_dir, "dataset", "CSV-03-11"),
             os.path.join(base_dir, "raw_dataset", "CSV-03-11", "03-11"),
             os.path.join(base_dir, "raw_dataset", "CSV-03-11"),
             os.path.join(base_dir, "raw_data", "CSV-03-11", "03-11"),

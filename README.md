@@ -9,18 +9,21 @@ Machine Learning and Data Science project for DDoS Attack Detection using the **
 ```text
 ddos project/
 ├── cleaned_dataset/
-│   ├── cleaned_ddos_01_12.csv         # Cleaned dataset Day 1
-│   ├── cleaned_ddos_01_12_mapping.json
-│   ├── cleaned_ddos_03_11.csv         # Cleaned dataset Day 2
-│   ├── cleaned_ddos_03_11_mapping.json
-│   ├── cleaned_ddos_sample.csv        # Default preprocessed sample dataset (~240k rows, 70 features)
-│   └── label_mapping.json             # Default multi-class label mapping dictionary
-├── raw_dataset/                       # (Ignored by git) Raw CSV dataset folders
-│   ├── CSV-01-12/
-│   └── CSV-03-11/
+│   ├── cleaned_ddos_01_12.csv         # Cleaned & scaled dataset Day 1 (Training Set)
+│   ├── cleaned_ddos_03_11.csv         # Cleaned & scaled dataset Day 2 (Testing Set)
+│   ├── feature_columns.json           # Standard 67 flow features expected by DNN & Ryu
+│   ├── label_mapping.json             # Global multi-class label mapping dictionary
+│   └── scaler.pkl                     # Serialized MinMaxScaler fitted on Day 1
+├── models/
+│   ├── dnn_ddos_model.pt              # PyTorch trained model package for Ryu Controller
+│   ├── best_dnn_weights.pt            # Best model checkpoint weights
+│   ├── evaluation_report.json         # Comprehensive evaluation metrics on Day 2
+│   └── evaluation_summary.png         # Loss/F1 curves, Confusion Matrix, and ROC curve
+├── dataset/                           # Raw CSV dataset folders (CSV-01-12 & CSV-03-11)
 ├── data_prep.py                       # CLI pipeline script for data cleaning & sampling
+├── train_dnn.py                       # DNN model training and cross-day evaluation script
 ├── eda.ipynb                          # Jupyter Notebook for Exploratory Data Analysis & EDA
-├── requirements.txt                   # Required Python packages
+├── requirements.txt                   # Required Python packages (including PyTorch)
 └── .gitignore                         # Git ignore file for large raw data & checkpoints
 ```
 

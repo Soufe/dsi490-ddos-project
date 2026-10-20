@@ -1,0 +1,63 @@
+{
+  "accuracy": 0.9982137113449433,
+  "precision": 0.9989997785223871,
+  "recall": 0.9987785714285714,
+  "f1_score": 0.9988891627287306,
+  "roc_auc": 0.9995770654259241,
+  "false_positive_rate": 0.004105090311986864,
+  "confusion_matrix": {
+    "TN": 33964,
+    "FP": 140,
+    "FN": 171,
+    "TP": 139829
+  },
+  "avg_inference_latency_ms": 0.0019437977481364737,
+  "throughput_flows_per_sec": 514456.81576630275,
+  "total_test_samples": 174104,
+  "benign_test_samples": 34104,
+  "attack_test_samples": 140000,
+  "per_class_breakdown": [
+    {
+      "Class": "BENIGN",
+      "Samples": 34104,
+      "Correct": 33964,
+      "Accuracy": 0.9958949096880131
+    },
+    {
+      "Class": "LDAP",
+      "Samples": 9931,
+      "Correct": 9916,
+      "Accuracy": 0.9984895780888128
+    },
+    {
+      "Class": "MSSQL",
+      "Samples": 30069,
+      "Correct": 30064,
+      "Accuracy": 0.9998337157870232
+    },
+    {
+      "Class": "NetBIOS",
+      "Samples": 40000,
+      "Correct": 39997,
+      "Accuracy": 0.999925
+    },
+    {
+      "Class": "Portmap",
+      "Samples": 20000,
+      "Correct": 19880,
+      "Accuracy": 0.994
+    },
+    {
+      "Class": "Syn",
+      "Samples": 20000,
+      "Correct": 19972,
+      "Accuracy": 0.9986
+    },
+    {
+      "Class": "UDP",
+      "Samples": 20000,
+      "Correct": 20000,
+      "Accuracy": 1.0
+    }
+  ]
+}
