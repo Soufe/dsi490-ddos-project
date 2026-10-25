@@ -1,0 +1,9 @@
+{
+  "BENIGN": 0,
+  "LDAP": 2,
+  "MSSQL": 3,
+  "NetBIOS": 5,
+  "Portmap": 6,
+  "Syn": 9,
+  "UDP": 11
+}

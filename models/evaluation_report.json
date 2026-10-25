@@ -1,18 +1,18 @@
 {
-  "accuracy": 0.9982137113449433,
-  "precision": 0.9989997785223871,
-  "recall": 0.9987785714285714,
-  "f1_score": 0.9988891627287306,
-  "roc_auc": 0.9995770654259241,
-  "false_positive_rate": 0.004105090311986864,
+  "accuracy": 0.998006938381657,
+  "precision": 0.9986431769654296,
+  "recall": 0.9988785714285714,
+  "f1_score": 0.9987608603271757,
+  "roc_auc": 0.9998401803516973,
+  "false_positive_rate": 0.005571193994839315,
   "confusion_matrix": {
-    "TN": 33964,
-    "FP": 140,
-    "FN": 171,
-    "TP": 139829
+    "TN": 33914,
+    "FP": 190,
+    "FN": 157,
+    "TP": 139843
   },
-  "avg_inference_latency_ms": 0.0019437977481364737,
-  "throughput_flows_per_sec": 514456.81576630275,
+  "avg_inference_latency_ms": 0.0038178992543013712,
+  "throughput_flows_per_sec": 261924.14555553475,
   "total_test_samples": 174104,
   "benign_test_samples": 34104,
   "attack_test_samples": 140000,
@@ -20,38 +20,38 @@
     {
       "Class": "BENIGN",
       "Samples": 34104,
-      "Correct": 33964,
-      "Accuracy": 0.9958949096880131
+      "Correct": 33914,
+      "Accuracy": 0.9944288060051607
     },
     {
       "Class": "LDAP",
       "Samples": 9931,
-      "Correct": 9916,
-      "Accuracy": 0.9984895780888128
+      "Correct": 9917,
+      "Accuracy": 0.9985902728828919
     },
     {
       "Class": "MSSQL",
       "Samples": 30069,
-      "Correct": 30064,
-      "Accuracy": 0.9998337157870232
+      "Correct": 30065,
+      "Accuracy": 0.9998669726296185
     },
     {
       "Class": "NetBIOS",
       "Samples": 40000,
-      "Correct": 39997,
-      "Accuracy": 0.999925
+      "Correct": 40000,
+      "Accuracy": 1.0
     },
     {
       "Class": "Portmap",
       "Samples": 20000,
-      "Correct": 19880,
-      "Accuracy": 0.994
+      "Correct": 19890,
+      "Accuracy": 0.9945
     },
     {
       "Class": "Syn",
       "Samples": 20000,
-      "Correct": 19972,
-      "Accuracy": 0.9986
+      "Correct": 19971,
+      "Accuracy": 0.99855
     },
     {
       "Class": "UDP",
