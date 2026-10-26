@@ -1,0 +1,21 @@
+{
+  "samples": 97452,
+  "benign_samples": 49416,
+  "attack_samples": 48036,
+  "invalid_rows_removed": 2548,
+  "accuracy": 0.997557772031359,
+  "precision": 0.9953365942629746,
+  "recall": 0.999729369639437,
+  "f1_score": 0.9975281459017075,
+  "fpr": 0.004553181155900923,
+  "roc_auc": 0.9997415406923302,
+  "confusion_matrix": {
+    "TN": 49191,
+    "FP": 225,
+    "FN": 13,
+    "TP": 48023
+  },
+  "elapsed_seconds": 296.7098888999899,
+  "seed": 42,
+  "note": "Approximately balanced sample from raw CSVs. Invalid feature rows removed before evaluation."
+}

@@ -1,3 +1,12 @@
+"""Evaluate DNN on raw CICDDoS2019 CSV files.
+
+Sampling modes:
+    balanced   : 50% BENIGN / 50% DDoS
+    stratified : up to --per-type samples per attack type
+
+Uses the existing trained DNN and scaler.
+"""
+
 import argparse
 import json
 import time
@@ -26,16 +35,26 @@ from predict_ddos import load_inference_components
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Evaluate DNN on raw CICDDoS2019 CSV files"
-    )
+    parser = argparse.ArgumentParser(description="Evaluate DNN on raw CICDDoS2019 CSVs")
 
     parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument(
+        "--sampling",
+        choices=("balanced", "stratified"),
+        default="balanced",
+    )
     parser.add_argument("--samples", type=int, default=2000)
+    parser.add_argument("--per-type", type=int, default=10000)
     parser.add_argument("--chunksize", type=int, default=20000)
     parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output", type=Path, default=Path("evaluation_real"))
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("evaluation_real"),
+    )
+
     parser.add_argument(
         "--label-mapping",
         type=Path,
@@ -50,33 +69,34 @@ def parse_args():
 # ============================================================
 
 
-def load_valid_labels(mapping_path):
-    with open(mapping_path, "r", encoding="utf-8") as f:
+def load_valid_labels(path):
+    with open(path, "r", encoding="utf-8") as f:
         mapping = json.load(f)
 
     if mapping.get("BENIGN") != 0:
-        raise ValueError("Invalid label mapping: BENIGN must be 0")
+        raise ValueError("BENIGN must be mapped to 0")
 
-    return set(mapping.keys())
+    return set(mapping)
 
 
 def map_labels(series, valid_labels):
-    """
-    BENIGN = 0
-    Known attack labels = 1
-    Unknown labels = -1
-    """
     normalized = normalize_labels(series.astype(str))
+
+    if not isinstance(normalized, pd.Series):
+        normalized = pd.Series(normalized, index=series.index)
+
+    normalized = normalized.astype(str)
     valid = normalized.isin(valid_labels)
 
-    targets = pd.Series(-1, index=series.index, dtype=int)
-    targets.loc[valid] = (normalized.loc[valid] != "BENIGN").astype(int)
+    binary = pd.Series(-1, index=series.index, dtype="int8")
 
-    return normalized, targets
+    binary.loc[valid] = (normalized.loc[valid] != "BENIGN").astype("int8")
+
+    return normalized, binary
 
 
 # ============================================================
-# 3. SAMPLE DATASET
+# 3. DATASET SAMPLING
 # ============================================================
 
 
@@ -84,14 +104,16 @@ def sample_dataset(
     folder,
     feature_columns,
     valid_labels,
-    total_samples,
+    sampling,
+    samples,
+    per_type,
     chunksize,
     seed,
 ):
     folder = Path(folder)
 
     if not folder.is_dir():
-        raise FileNotFoundError(f"Dataset folder not found: {folder}")
+        raise FileNotFoundError(f"Dataset not found: {folder.resolve()}")
 
     csv_files = sorted(
         p
@@ -102,16 +124,21 @@ def sample_dataset(
     if not csv_files:
         raise FileNotFoundError("No CSV files found")
 
-    quotas = {
-        0: total_samples // 2,
-        1: total_samples - total_samples // 2,
-    }
+    if sampling == "balanced":
+        quotas = {
+            "BENIGN": samples // 2,
+            "ATTACK": samples - samples // 2,
+        }
+    else:
+        quotas = {label: per_type for label in sorted(valid_labels)}
 
-    reservoirs = {0: pd.DataFrame(), 1: pd.DataFrame()}
+    reservoirs = {key: pd.DataFrame() for key in quotas}
+
     rng = np.random.default_rng(seed)
 
-    scanned = {0: 0, 1: 0}
-    excluded_labels = set()
+    source_counts = {label: 0 for label in sorted(valid_labels)}
+
+    unknown_counts = {}
     file_statistics = []
 
     required = set(feature_columns) | {"Label"}
@@ -122,38 +149,42 @@ def sample_dataset(
         try:
             header = pd.read_csv(file_path, nrows=0)
         except (pd.errors.EmptyDataError, UnicodeError) as exc:
-            print(f"  Skipped: {exc}")
-            continue
+            print(f"Skipped: {exc}")
 
-        header.columns = header.columns.str.strip()
-
-        if header.columns.duplicated().any():
-            print("  Skipped: duplicate columns")
-            continue
-
-        missing = sorted(required - set(header.columns))
-
-        if missing:
-            print(f"  Skipped: missing {len(missing)} features")
             file_statistics.append(
                 {
-                    "file": str(file_path),
-                    "status": "missing_columns",
+                    "file": str(file_path.resolve()),
+                    "status": "unreadable",
                     "rows": 0,
                     "benign": 0,
                     "attack": 0,
                     "unmapped": 0,
-                    "missing_columns": "; ".join(missing),
                 }
             )
             continue
 
-        counts = {
-            "rows": 0,
-            "benign": 0,
-            "attack": 0,
-            "unmapped": 0,
-        }
+        header.columns = header.columns.str.strip()
+
+        if header.columns.duplicated().any() or not required.issubset(header.columns):
+            missing = sorted(required - set(header.columns))
+            print(f"Skipped invalid columns: {missing[:8]}")
+
+            file_statistics.append(
+                {
+                    "file": str(file_path.resolve()),
+                    "status": "invalid_columns",
+                    "rows": 0,
+                    "benign": 0,
+                    "attack": 0,
+                    "unmapped": 0,
+                }
+            )
+            continue
+
+        file_rows = 0
+        file_benign = 0
+        file_attack = 0
+        file_unmapped = 0
 
         reader = pd.read_csv(
             file_path,
@@ -164,122 +195,191 @@ def sample_dataset(
 
         for chunk in reader:
             chunk.columns = chunk.columns.str.strip()
-            counts["rows"] += len(chunk)
 
-            normalized, targets = map_labels(chunk["Label"], valid_labels)
+            normalized, binary = map_labels(
+                chunk["Label"],
+                valid_labels,
+            )
 
-            unknown_mask = targets.eq(-1)
+            file_benign += int(binary.eq(0).sum())
+            file_attack += int(binary.eq(1).sum())
+            file_unmapped += int(binary.eq(-1).sum())
 
-            if unknown_mask.any():
-                excluded_labels.update(normalized.loc[unknown_mask].unique().tolist())
+            for label, count in normalized.value_counts().items():
+                if label in valid_labels:
+                    source_counts[label] += int(count)
+                else:
+                    unknown_counts[label] = unknown_counts.get(label, 0) + int(count)
 
-            counts["unmapped"] += int(unknown_mask.sum())
+            if sampling == "balanced":
+                labels = normalized.where(
+                    binary.eq(0),
+                    "ATTACK",
+                )
+                labels = labels.where(binary.ne(-1), "UNKNOWN")
+            else:
+                labels = normalized
 
-            for target, name in ((0, "benign"), (1, "attack")):
-                positions = np.flatnonzero(targets.to_numpy() == target)
+            label_array = labels.to_numpy()
 
-                n = len(positions)
-                counts[name] += n
-                scanned[target] += n
+            for key, quota in quotas.items():
+                if quota == 0:
+                    continue
 
-                if n == 0:
+                positions = np.flatnonzero(label_array == key)
+
+                if len(positions) == 0:
                     continue
 
                 selected = chunk.iloc[positions][list(feature_columns)].copy()
 
-                selected["_label"] = target
+                selected["_label"] = binary.iloc[positions].to_numpy(dtype=int)
+
                 selected["_attack_type"] = normalized.iloc[positions].to_numpy()
-                selected["_source_file"] = str(file_path)
-                selected["_source_row"] = counts["rows"] - len(chunk) + positions + 2
-                selected["_random_key"] = rng.random(n)
+
+                selected["_source_file"] = str(file_path.resolve())
+
+                selected["_source_row"] = file_rows + positions + 2
+
+                selected["_random_key"] = rng.random(len(positions))
 
                 combined = pd.concat(
-                    [reservoirs[target], selected],
+                    [reservoirs[key], selected],
                     ignore_index=True,
                 )
 
-                reservoirs[target] = combined.nlargest(
-                    quotas[target], "_random_key"
+                reservoirs[key] = combined.nlargest(
+                    quota,
+                    "_random_key",
                 ).reset_index(drop=True)
+
+            file_rows += len(chunk)
 
         file_statistics.append(
             {
-                "file": str(file_path),
+                "file": str(file_path.resolve()),
                 "status": "scanned",
-                **counts,
-                "missing_columns": "",
+                "rows": file_rows,
+                "benign": file_benign,
+                "attack": file_attack,
+                "unmapped": file_unmapped,
             }
         )
 
     print("\n=== DATASET SCAN SUMMARY ===")
-    print(f"BENIGN: {scanned[0]:,}")
-    print(f"DDoS:   {scanned[1]:,}")
 
-    if excluded_labels:
-        print("\nUnmapped labels (excluded):")
-        for label in sorted(excluded_labels):
-            print(f" - {label}")
+    print(f"BENIGN: {source_counts.get('BENIGN', 0):,}")
+
+    total_attack = sum(
+        count for label, count in source_counts.items() if label != "BENIGN"
+    )
+
+    print(f"DDoS:   {total_attack:,}")
+
+    if unknown_counts:
+        print(f"Unmapped labels: {unknown_counts}")
     else:
-        print("\nUnmapped labels: none")
+        print("Unmapped labels: none")
 
-    if reservoirs[0].empty or reservoirs[1].empty:
-        raise ValueError("Both BENIGN and Attack samples are required")
+    print("\n=== SOURCE ATTACK TYPE COUNTS ===")
+
+    for label, count in source_counts.items():
+        print(f"{label}: {count:,}")
+
+    parts = [df for df in reservoirs.values() if not df.empty]
+
+    if not parts:
+        raise ValueError("No recognized samples found")
 
     sample = pd.concat(
-        [reservoirs[0], reservoirs[1]],
+        parts,
         ignore_index=True,
     )
 
-    sample = sample.sample(frac=1, random_state=seed).reset_index(drop=True)
+    sample = sample.sample(
+        frac=1,
+        random_state=seed,
+    ).reset_index(drop=True)
 
     sample = sample.drop(columns="_random_key")
 
-    if len(sample) < total_samples:
-        print(
-            f"[WARN] Requested {total_samples:,} samples, "
-            f"but only {len(sample):,} available"
-        )
-
-    return sample, pd.DataFrame(file_statistics)
+    return (
+        sample,
+        pd.DataFrame(file_statistics),
+        source_counts,
+        unknown_counts,
+    )
 
 
 # ============================================================
-# 4. FEATURE PREPROCESSING
+# 4. DATA CLEANING
+# ============================================================
+
+
+def clean_sample(sample, feature_columns):
+    numeric = sample[list(feature_columns)].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+
+    numeric = numeric.replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+
+    valid_mask = numeric.notna().all(axis=1)
+
+    invalid_by_type = (
+        sample.loc[~valid_mask, "_attack_type"]
+        .value_counts()
+        .rename_axis("attack_type")
+        .reset_index(name="invalid_rows")
+    )
+
+    cleaned = sample.loc[valid_mask].copy().reset_index(drop=True)
+
+    cleaned.loc[:, list(feature_columns)] = numeric.loc[valid_mask].to_numpy()
+
+    return (
+        cleaned,
+        int((~valid_mask).sum()),
+        invalid_by_type,
+    )
+
+
+# ============================================================
+# 5. FEATURE PREPROCESSING
 # ============================================================
 
 
 def prepare_features(sample, feature_columns, scaler):
-    """
-    Convert raw features to numeric and apply the
-    original training scaler exactly once.
-    """
-    x = sample[list(feature_columns)].apply(pd.to_numeric, errors="coerce")
+    features = sample[list(feature_columns)].astype("float64")
 
-    x = x.replace([np.inf, -np.inf], np.nan)
-
-    if x.isna().any().any():
-        raise ValueError("Invalid feature values remain after filtering")
-
-    scaled = scaler.transform(x)
+    scaled = scaler.transform(features)
 
     if not np.isfinite(scaled).all():
-        raise ValueError("Non-finite values found after scaling")
+        raise ValueError("Non-finite values after applying training scaler")
 
-    return np.asarray(scaled, dtype=np.float32)
+    return np.asarray(
+        scaled,
+        dtype=np.float32,
+    )
 
 
 # ============================================================
-# 5. DNN PREDICTION
+# 6. DNN PREDICTION
 # ============================================================
 
 
-def predict_in_batches(model, x, batch_size):
+def predict_in_batches(model, features, batch_size):
     model.eval()
+
+    device = next(model.parameters()).device
     probabilities = []
 
     with torch.inference_mode():
-        for start in range(0, len(x), batch_size):
-            batch = torch.from_numpy(x[start : start + batch_size])
+        for start in range(0, len(features), batch_size):
+            batch = torch.from_numpy(features[start : start + batch_size]).to(device)
 
             logits = model(batch)
 
@@ -291,64 +391,66 @@ def predict_in_batches(model, x, batch_size):
 
 
 # ============================================================
-# 6. MAIN EVALUATION
+# 7. MAIN
 # ============================================================
 
 
 def main():
     args = parse_args()
-    started = time.perf_counter()
 
-    if args.samples < 2 or args.chunksize < 1 or args.batch_size < 1:
-        raise ValueError("Invalid sample, chunk or batch size")
+    if (
+        args.samples < 2
+        or args.per_type < 1
+        or args.chunksize < 1
+        or args.batch_size < 1
+    ):
+        raise ValueError("Invalid sampling parameters")
+
+    started = time.perf_counter()
 
     valid_labels = load_valid_labels(args.label_mapping)
 
     model, scaler, feature_columns = load_inference_components()
 
+    if scaler is None:
+        raise ValueError("Saved training scaler is required")
+
     print("\n=== MODEL INFORMATION ===")
     print(f"Input features: {len(feature_columns)}")
+    print(f"Sampling: {args.sampling}")
 
     if len(feature_columns) != 67:
         print(f"[WARN] Expected 67 features, " f"found {len(feature_columns)}")
 
-    if scaler is None:
-        raise ValueError("Saved training scaler is required")
-
-    # Sample raw CSVs
-    sample, file_stats = sample_dataset(
+    # Sample dataset
+    sample, file_stats, source_counts, unknown_counts = sample_dataset(
         folder=args.dataset,
         feature_columns=feature_columns,
         valid_labels=valid_labels,
-        total_samples=args.samples,
+        sampling=args.sampling,
+        samples=args.samples,
+        per_type=args.per_type,
         chunksize=args.chunksize,
         seed=args.seed,
     )
 
-    # --------------------------------------------------------
-    # Remove rows containing NaN, Inf or non-numeric features
-    # --------------------------------------------------------
-    numeric_features = sample[list(feature_columns)].apply(
-        pd.to_numeric,
-        errors="coerce",
-    )
+    selected_counts = sample["_attack_type"].value_counts()
 
-    numeric_features = numeric_features.replace(
-        [np.inf, -np.inf],
-        np.nan,
+    # Clean invalid rows
+    sample, removed, invalid_by_type = clean_sample(
+        sample,
+        feature_columns,
     )
-
-    valid_mask = numeric_features.notna().all(axis=1)
-    removed = int((~valid_mask).sum())
 
     print(f"\nInvalid rows removed: {removed:,}")
-
-    sample = sample.loc[valid_mask].reset_index(drop=True)
 
     if sample.empty:
         raise ValueError("No valid samples remain after cleaning")
 
-    # Preprocess features using the original scaler
+    if sample["_label"].nunique() < 2:
+        raise ValueError("Need both BENIGN and DDoS for evaluation")
+
+    # Prepare features
     x = prepare_features(
         sample,
         feature_columns,
@@ -366,52 +468,106 @@ def main():
 
     y_pred = (probabilities >= 0.5).astype(int)
 
-    # Metrics
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-
-    accuracy = float(accuracy_score(y_true, y_pred))
-    precision = float(precision_score(y_true, y_pred, zero_division=0))
-    recall = float(recall_score(y_true, y_pred, zero_division=0))
-    f1 = float(f1_score(y_true, y_pred, zero_division=0))
-
-    fpr = float(fp / (fp + tn)) if (fp + tn) else None
-
-    auc = (
-        float(roc_auc_score(y_true, probabilities))
-        if len(np.unique(y_true)) == 2
-        else None
+    # Confusion Matrix
+    tn, fp, fn, tp = (
+        int(v)
+        for v in confusion_matrix(
+            y_true,
+            y_pred,
+            labels=[0, 1],
+        ).ravel()
     )
 
-    elapsed = time.perf_counter() - started
+    # Metrics
+    metrics = {
+        "sampling": args.sampling,
+        "requested_samples": (args.samples if args.sampling == "balanced" else None),
+        "per_type_limit": (args.per_type if args.sampling == "stratified" else None),
+        "selected_before_cleaning": int(len(sample) + removed),
+        "invalid_rows_removed": removed,
+        "samples": int(len(sample)),
+        "benign_samples": int((y_true == 0).sum()),
+        "attack_samples": int((y_true == 1).sum()),
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "precision": float(
+            precision_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+        ),
+        "recall": float(
+            recall_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+        ),
+        "f1_score": float(
+            f1_score(
+                y_true,
+                y_pred,
+                zero_division=0,
+            )
+        ),
+        "fpr": (float(fp / (fp + tn)) if fp + tn else None),
+        "roc_auc": float(roc_auc_score(y_true, probabilities)),
+        "confusion_matrix": {
+            "TN": tn,
+            "FP": fp,
+            "FN": fn,
+            "TP": tp,
+        },
+        "seed": args.seed,
+        "dataset": str(args.dataset.resolve()),
+        "note": (
+            "Rows with non-finite features are excluded. "
+            "Training-only imputation medians were unavailable."
+        ),
+    }
 
+    metrics["elapsed_seconds"] = float(time.perf_counter() - started)
+
+    # Print evaluation
     print("\n=== REAL DATA DNN EVALUATION ===")
-    print(f"Samples   : {len(y_true):,}")
-    print(f"Accuracy  : {accuracy:.6f}")
-    print(f"Precision : {precision:.6f}")
-    print(f"Recall    : {recall:.6f}")
-    print(f"F1-score  : {f1:.6f}")
-    print(f"FPR       : {fpr:.6f}" if fpr is not None else "FPR       : N/A")
-    print(f"ROC AUC   : {auc:.6f}" if auc is not None else "ROC AUC   : N/A")
+    print(f"Samples   : {metrics['samples']:,}")
+
+    for name in (
+        "accuracy",
+        "precision",
+        "recall",
+        "f1_score",
+        "fpr",
+        "roc_auc",
+    ):
+        value = metrics[name]
+
+        if value is not None:
+            print(f"{name:<10}: {value:.6f}")
+        else:
+            print(f"{name}: N/A")
+
     print(f"TN={tn}, FP={fp}, FN={fn}, TP={tp}")
 
     print(
-        "\n"
-        + classification_report(
+        classification_report(
             y_true,
             y_pred,
             labels=[0, 1],
             target_names=["BENIGN", "DDoS"],
             zero_division=0,
+            digits=4,
         )
     )
 
-    print(f"Elapsed: {elapsed:.2f} seconds")
+    print(f"Elapsed: {metrics['elapsed_seconds']:.2f} seconds")
 
     # ========================================================
-    # 7. SAVE RESULTS
+    # 8. SAVE RESULTS
     # ========================================================
 
-    args.output.mkdir(parents=True, exist_ok=True)
+    output = args.output / args.sampling
+    output.mkdir(parents=True, exist_ok=True)
 
     predictions = sample[
         [
@@ -434,65 +590,91 @@ def main():
     predictions["correct"] = y_true == y_pred
 
     predictions.to_csv(
-        args.output / "predictions.csv",
+        output / "predictions.csv",
         index=False,
     )
 
     file_stats.to_csv(
-        args.output / "file_statistics.csv",
+        output / "file_statistics.csv",
         index=False,
     )
 
     attack_summary = (
-        predictions.groupby("attack_type", dropna=False)
+        predictions.groupby(
+            "attack_type",
+            dropna=False,
+        )
         .agg(
             samples=("correct", "size"),
             correct=("correct", "sum"),
-            avg_ddos_probability=("ddos_probability", "mean"),
+            avg_ddos_probability=(
+                "ddos_probability",
+                "mean",
+            ),
         )
         .reset_index()
     )
 
     attack_summary["accuracy"] = attack_summary["correct"] / attack_summary["samples"]
 
+    attack_summary["missed_or_false_alarm"] = (
+        attack_summary["samples"] - attack_summary["correct"]
+    )
+
     attack_summary.to_csv(
-        args.output / "attack_type_summary.csv",
+        output / "attack_type_summary.csv",
         index=False,
     )
 
-    metrics = {
-        "samples": len(y_true),
-        "benign_samples": int((y_true == 0).sum()),
-        "attack_samples": int((y_true == 1).sum()),
-        "invalid_rows_removed": removed,
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1_score": f1,
-        "fpr": fpr,
-        "roc_auc": auc,
-        "confusion_matrix": {
-            "TN": int(tn),
-            "FP": int(fp),
-            "FN": int(fn),
-            "TP": int(tp),
-        },
-        "elapsed_seconds": elapsed,
-        "seed": args.seed,
-        "note": (
-            "Approximately balanced sample from raw CSVs. "
-            "Invalid feature rows removed before evaluation."
-        ),
-    }
+    # Sampling summary
+    counts_df = pd.DataFrame({"attack_type": sorted(valid_labels)})
+
+    counts_df["source_rows"] = (
+        counts_df["attack_type"].map(source_counts).fillna(0).astype(int)
+    )
+
+    counts_df["selected_before_cleaning"] = (
+        counts_df["attack_type"].map(selected_counts).fillna(0).astype(int)
+    )
+
+    if invalid_by_type.empty:
+        invalid_counts = pd.Series(dtype=int)
+    else:
+        invalid_counts = invalid_by_type.set_index("attack_type")["invalid_rows"]
+
+    counts_df["invalid_removed"] = (
+        counts_df["attack_type"].map(invalid_counts).fillna(0).astype(int)
+    )
+
+    counts_df["evaluated"] = (
+        counts_df["selected_before_cleaning"] - counts_df["invalid_removed"]
+    )
+
+    counts_df.to_csv(
+        output / "sampling_summary.csv",
+        index=False,
+    )
+
+    invalid_by_type.to_csv(
+        output / "invalid_by_type.csv",
+        index=False,
+    )
 
     with open(
-        args.output / "metrics.json",
+        output / "metrics.json",
         "w",
         encoding="utf-8",
     ) as f:
-        json.dump(metrics, f, indent=2)
+        json.dump(
+            metrics,
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
 
-    print(f"\nSaved evaluation files to: " f"{args.output.resolve()}")
+    print(f"\nSaved evaluation to: {output.resolve()}")
+
+    print("Note: Overall metrics depend on sampling distribution.")
 
 
 if __name__ == "__main__":
